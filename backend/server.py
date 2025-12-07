@@ -1,4 +1,4 @@
-import pandas as pd # Import pandas
+import pandas as pd
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import joblib
@@ -7,10 +7,10 @@ import numpy as np
 app = Flask(__name__)
 CORS(app)
 
-# Load the model safely
-model = joblib.load("model/xgb_model.pkl")
+# Load the two models
+model_motor = joblib.load("models/park_xgb_motor_updrs.pkl")
+model_total = joblib.load("models/park_xgb_total_updrs.pkl")
 
-# Define the exact 12 features in order
 EXPECTED_FEATURES = [
     'age', 'sex', 'test_time',
     'Jitter(%)', 'Jitter:PPQ5',
@@ -23,17 +23,21 @@ def predict():
     try:
         data = request.get_json()
 
-        # Convert to DataFrame
-        df = pd.DataFrame([data], columns=EXPECTED_COLUMNS)
+        # Create DataFrame with headers
+        df = pd.DataFrame([data], columns=EXPECTED_FEATURES)
 
-        # Predict
-        prediction = model.predict(df)[0]
+        # Predict using both models
+        motor_UPDRS = float(model_motor.predict(df)[0])
+        total_UPDRS = float(model_total.predict(df)[0])
 
-        return jsonify({"prediction": float(prediction)})
+        return jsonify({
+            "motor_UPDRS": motor_UPDRS,
+            "total_UPDRS": total_UPDRS
+        })
 
     except Exception as e:
+        print("Flask error:", e)
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
