@@ -1,4 +1,4 @@
-export const BASE_URL = "http://192.168.1.7:5000"; 
+export const BASE_URL = "https://predicting-parkinsons-disease-severity-backend-production-864c.up.railway.app"; 
 
 export interface PredictionResult {
   motor_UPDRS: number;
