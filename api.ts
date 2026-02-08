@@ -1,4 +1,4 @@
-export const BASE_URL = "https://parkinson-fzgag3hee0d9fsgp.canadacentral-01.azurewebsites.net"; 
+export const BASE_URL = "http://192.168.1.7:5000"; 
 
 export interface PredictionResult {
   motor_UPDRS: number;
