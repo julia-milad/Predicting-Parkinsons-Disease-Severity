@@ -22,6 +22,7 @@ import { db, auth } from "@/firebase";
 import { collection, addDoc } from "firebase/firestore";
 
 interface FeatureValues {
+  patientId: string;
   age: string;
   sex: string;
   test_time: string;
@@ -37,7 +38,9 @@ interface FeatureValues {
   [key: string]: string;
 }
 
+// Map for display
 const FEATURE_MAPPING: { [key in keyof FeatureValues]?: string } = {
+  patientId: "Patient ID",
   age: "Age",
   sex: "Sex (0 = Female, 1 = Male)",
   test_time: "Test Time (Sec)",
@@ -67,7 +70,9 @@ const featureKeys: (keyof FeatureValues)[] = [
   "PPE",
 ];
 
+// FINAL: pre-fill with a training row
 const initialFeatureValues: FeatureValues = {
+  patientId: "",
   age: "",
   sex: "",
   test_time: "",
@@ -83,50 +88,45 @@ const initialFeatureValues: FeatureValues = {
 };
 
 const FEATURE_CONSTRAINTS: { [key in keyof FeatureValues]?: { min?: number; max?: number } } = {
-  age: { min: 0, max: 120 },
+  age: { min: 41, max: 82 },
   sex: { min: 0, max: 1 },
-  test_time: { min: 0 },
-  "Jitter(%)": { min: 0 },
-  "Jitter:PPQ5": { min: 0 },
-  "Shimmer(dB)": { min: 0 },
-  "Shimmer:APQ5": { min: 0 },
-  NHR: { min: 0 },
-  HNR: { min: 0 },
-  RPDE: { min: 0, max: 1 },
-  DFA: { min: 0, max: 1 },
-  PPE: { min: 0 },
+  test_time: { min: 0, max: 6 },
+  "Jitter(%)": { min: 0.001, max: 0.03 },
+  "Jitter:PPQ5": { min: 0.001, max: 0.02 },
+  "Shimmer(dB)": { min: 0.01, max: 0.7 },
+  "Shimmer:APQ5": { min: 0.01, max: 0.5 },
+  NHR: { min: 0.0, max: 0.2 },
+  HNR: { min: 10, max: 35 },
+  RPDE: { min: 0.2, max: 0.8 },
+  DFA: { min: 0.5, max: 1.0 },
+  PPE: { min: 0.1, max: 0.6 },
 };
 
-type HomeScreenProps = {
-  navigation: {
-    navigate: (screen: string) => void;
-  };
-};
-
-export default function Home({ navigation }: HomeScreenProps) {
+export default function Home() {
   const colorScheme = useColorScheme();
 
   const [predictions, setPredictions] = useState<PredictionResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [featureValues, setFeatureValues] = useState<FeatureValues>(initialFeatureValues);
-
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
 
-  const handleInputChange = (key: keyof FeatureValues, value: string): void => {
-    setFeatureValues((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
+  const handleInputChange = (key: keyof FeatureValues, value: string) => {
+    setFeatureValues((prev) => ({ ...prev, [key]: value }));
     setFieldErrors((prev) => ({ ...prev, [key]: "" }));
   };
 
-  const sendPredictionData = async (): Promise<void> => {
+  const sendPredictionData = async () => {
     setLoading(true);
     setPredictions(null);
 
     const features: { [key: string]: number } = {};
     let hasError = false;
     const newErrors: { [key: string]: string } = {};
+
+    if (!featureValues.patientId.trim()) {
+      newErrors.patientId = "Patient ID is required";
+      hasError = true;
+    }
 
     for (const key of featureKeys) {
       const value = featureValues[key];
@@ -174,6 +174,7 @@ export default function Home({ navigation }: HomeScreenProps) {
       setPredictions(result);
 
       await addDoc(collection(db, "predictions"), {
+        patientId: featureValues.patientId,
         ...features,
         motor_UPDRS: result.motor_UPDRS,
         total_UPDRS: result.total_UPDRS,
@@ -223,24 +224,34 @@ export default function Home({ navigation }: HomeScreenProps) {
           </Text>
 
           <View style={styles.card}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Patient ID</Text>
+              <TextInput
+                style={[styles.input, fieldErrors.patientId ? styles.inputErrorBorder : null]}
+                value={featureValues.patientId}
+                onChangeText={(text) => handleInputChange("patientId", text)}
+                placeholder="Enter patient ID"
+                placeholderTextColor="#999"
+              />
+              {fieldErrors.patientId ? <Text style={styles.errorText}>{fieldErrors.patientId}</Text> : null}
+            </View>
             <View style={styles.inputGrid}>
               {featureKeys.map((key) => (
                 <View key={key} style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>{FEATURE_MAPPING[key] || key}</Text>
                   <TextInput
-                    style={[
-                      styles.input,
-                      fieldErrors[key] ? styles.inputErrorBorder : null,
-                    ]}
+                    style={[styles.input, fieldErrors[key] ? styles.inputErrorBorder : null]}
                     value={featureValues[key]}
                     onChangeText={(text) => handleInputChange(key, text)}
                     keyboardType="numeric"
-                    placeholder="0.00"
+                    placeholder={
+                      FEATURE_CONSTRAINTS[key]
+                        ? `${FEATURE_CONSTRAINTS[key]?.min} - ${FEATURE_CONSTRAINTS[key]?.max}`
+                        : "0.00"
+                    }
                     placeholderTextColor="#999"
                   />
-                  {fieldErrors[key] ? (
-                    <Text style={styles.errorText}>{fieldErrors[key]}</Text>
-                  ) : null}
+                  {fieldErrors[key] ? <Text style={styles.errorText}>{fieldErrors[key]}</Text> : null}
                 </View>
               ))}
             </View>
@@ -260,7 +271,6 @@ export default function Home({ navigation }: HomeScreenProps) {
             )}
           </View>
 
-          {/* Results Section */}
           {predictions && (
             <View style={styles.resultBox}>
               <View style={styles.resultItem}>

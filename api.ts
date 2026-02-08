@@ -1,0 +1,28 @@
+export const BASE_URL = "https://parkinson-fzgag3hee0d9fsgp.canadacentral-01.azurewebsites.net"; 
+
+export interface PredictionResult {
+  motor_UPDRS: number;
+  total_UPDRS: number;
+}
+
+export const getPrediction = async (features: Record<string, any>): Promise<PredictionResult> => {
+  try {
+    const res = await fetch(`${BASE_URL}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(features),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      const errorMessage = data?.error || res.statusText;
+      throw new Error(`Server error: ${errorMessage}`);
+    }
+
+    return data as PredictionResult;
+  } catch (error: any) {
+    console.error("API Error:", error.message || error);
+    throw error;
+  }
+};
