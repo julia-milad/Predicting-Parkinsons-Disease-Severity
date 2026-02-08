@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Parkinson Analyzer",
-    "slug": "parkinson-analyzer",
+    "slug": "my-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
