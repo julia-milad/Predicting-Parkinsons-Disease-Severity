@@ -11,6 +11,7 @@ export default function HowToUse() {
   const router = useRouter();
 
   const medicalFields = [
+    { group: "Patient Info", items: ["Patient ID"] },
     { group: "Demographics", items: ["Age", "Sex"] },
     { group: "Timing", items: ["Test Time (Sec)"] },
     { group: "Pitch Stability (Jitter)", items: ["Pitch Wobbliness", "Refined Pitch Wobbliness"] },
@@ -37,7 +38,7 @@ export default function HowToUse() {
         </View>
         <Text style={styles.sectionTitle}>Required Measurements</Text>
         <Text style={styles.text}>
-          Ensure all 12 feature scores are entered correctly from your lab analysis report.
+          Ensure Patient ID and all 12 feature scores are entered correctly from your lab analysis report.
         </Text>
 
         <View style={styles.gridContainer}>
