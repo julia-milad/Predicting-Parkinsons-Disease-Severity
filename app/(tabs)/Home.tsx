@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -10,16 +10,14 @@ import {
   Platform,
   KeyboardAvoidingView,
 } from "react-native";
-
 import { Link } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
 import { getPrediction, PredictionResult } from "@/api";
 import { serverTimestamp } from "firebase/firestore";
-
 import { db, auth } from "@/firebase";
-import { collection, addDoc } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, limit } from "firebase/firestore";
 
 interface FeatureValues {
   patientId: string;
@@ -38,21 +36,20 @@ interface FeatureValues {
   [key: string]: string;
 }
 
-// Map for display
 const FEATURE_MAPPING: { [key in keyof FeatureValues]?: string } = {
   patientId: "Patient ID",
   age: "Age",
   sex: "Sex (0 = Female, 1 = Male)",
   test_time: "Test Time (Sec)",
-  "Jitter(%)": "Pitch Wobbliness",
-  "Jitter:PPQ5": "Refined Pitch Wobbliness",
-  "Shimmer(dB)": "Loudness Unsteadiness",
-  "Shimmer:APQ5": "Refined Loudness Unsteadiness",
-  NHR: "Noisiness Score",
-  HNR: "Clarity Score",
-  RPDE: "Signal Randomness",
-  DFA: "Pitch Pattern Consistency",
-  PPE: "Pitch Period Disorder",
+  "Jitter(%)": "Pitch Wobbliness (Jitter)",
+  "Jitter:PPQ5": "Refined Pitch Wobbliness (Jitter:PPQ5)",
+  "Shimmer(dB)": "Loudness Unsteadiness (Shimmer)",
+  "Shimmer:APQ5": "Refined Loudness Unsteadiness (Shimmer:APQ5)",
+  NHR: "Noisiness Score (NHR)",
+  HNR: "Clarity Score (HNR)",
+  RPDE: "Signal Randomness (RPDE)",
+  DFA: "Pitch Pattern Consistency (DFA)",
+  PPE: "Pitch Period Disorder (PPE)",
 };
 
 const featureKeys: (keyof FeatureValues)[] = [
@@ -70,7 +67,6 @@ const featureKeys: (keyof FeatureValues)[] = [
   "PPE",
 ];
 
-// FINAL: pre-fill with a training row
 const initialFeatureValues: FeatureValues = {
   patientId: "",
   age: "",
@@ -104,15 +100,50 @@ const FEATURE_CONSTRAINTS: { [key in keyof FeatureValues]?: { min?: number; max?
 
 export default function Home() {
   const colorScheme = useColorScheme();
-
   const [predictions, setPredictions] = useState<PredictionResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [featureValues, setFeatureValues] = useState<FeatureValues>(initialFeatureValues);
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
+  const fetchTimeout = useRef<number | null>(null);
+
+  // --- Fetch patient data only if it belongs to the current doctor ---
+  const fetchPatientData = async (id: string) => {
+    if (!id || !auth.currentUser) return;
+
+    try {
+      const q = query(
+        collection(db, "predictions"),
+        where("patientId", "==", id),
+        where("userId", "==", auth.currentUser.uid), // filter by current doctor
+        limit(1)
+      );
+
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const docData = snapshot.docs[0].data();
+        setFeatureValues((prev) => ({
+          ...prev,
+          age: docData.age?.toString() ?? "",
+          sex: docData.sex?.toString() ?? "",
+        }));
+      } else {
+        setFeatureValues((prev) => ({ ...prev, age: "", sex: "" }));
+      }
+    } catch (error) {
+      console.error("Error fetching patient data:", error);
+    }
+  };
 
   const handleInputChange = (key: keyof FeatureValues, value: string) => {
     setFeatureValues((prev) => ({ ...prev, [key]: value }));
     setFieldErrors((prev) => ({ ...prev, [key]: "" }));
+
+    if (key === "patientId") {
+      if (fetchTimeout.current) clearTimeout(fetchTimeout.current);
+      fetchTimeout.current = setTimeout(() => {
+        fetchPatientData(value.trim());
+      }, 500) as unknown as number;
+    }
   };
 
   const sendPredictionData = async () => {
@@ -163,7 +194,6 @@ export default function Home() {
     }
 
     setFieldErrors(newErrors);
-
     if (hasError) {
       setLoading(false);
       return;
@@ -178,7 +208,7 @@ export default function Home() {
         ...features,
         motor_UPDRS: result.motor_UPDRS,
         total_UPDRS: result.total_UPDRS,
-        userId: auth.currentUser?.uid || null,
+        userId: auth.currentUser?.uid || null, // store doctor UID
         createdAt: serverTimestamp(),
       });
     } catch (error) {
@@ -190,20 +220,17 @@ export default function Home() {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      style={{ flex: 1 }}
-    >
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
       <ScrollView
         contentContainerStyle={[
           styles.scrollContainer,
-          { backgroundColor: Colors[colorScheme ?? "light"].background }
+          { backgroundColor: Colors[colorScheme ?? "light"].background },
         ]}
       >
         <View style={styles.container}>
           <View style={styles.headerRow}>
             <Text style={[styles.title, { color: Colors[colorScheme ?? "light"].text }]}>
-              Analysis
+              Parkinson Analyzer
             </Text>
             <Link href="/screens/HowToUse" asChild>
               <Pressable style={styles.infoButton}>
@@ -220,28 +247,33 @@ export default function Home() {
           </View>
 
           <Text style={styles.description}>
-            Enter voice feature scores for severity analysis.
+            Enter voice feature scores from the lab report to analyze severity. Tap the top icon for details.
           </Text>
 
+          {fieldErrors.general ? <Text style={styles.errorText}>{fieldErrors.general}</Text> : null}
+
           <View style={styles.card}>
+            {/* Patient ID */}
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Patient ID</Text>
               <TextInput
                 style={[styles.input, fieldErrors.patientId ? styles.inputErrorBorder : null]}
-                value={featureValues.patientId}
+                value={featureValues.patientId ?? ""}
                 onChangeText={(text) => handleInputChange("patientId", text)}
                 placeholder="Enter patient ID"
                 placeholderTextColor="#999"
               />
               {fieldErrors.patientId ? <Text style={styles.errorText}>{fieldErrors.patientId}</Text> : null}
             </View>
+
+            {/* Feature Inputs */}
             <View style={styles.inputGrid}>
               {featureKeys.map((key) => (
                 <View key={key} style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>{FEATURE_MAPPING[key] || key}</Text>
                   <TextInput
                     style={[styles.input, fieldErrors[key] ? styles.inputErrorBorder : null]}
-                    value={featureValues[key]}
+                    value={featureValues[key] ?? ""}
                     onChangeText={(text) => handleInputChange(key, text)}
                     keyboardType="numeric"
                     placeholder={
@@ -271,154 +303,52 @@ export default function Home() {
             )}
           </View>
 
-          {predictions && (
+          {/* Prediction Results */}
+          {predictions ? (
             <View style={styles.resultBox}>
               <View style={styles.resultItem}>
                 <Text style={styles.resultLabel}>Motor UPDRS</Text>
-                <Text style={styles.resultValue}>{predictions.motor_UPDRS.toFixed(3)}</Text>
+                <Text style={styles.resultValue}>
+                  {predictions.motor_UPDRS !== undefined ? predictions.motor_UPDRS.toFixed(3) : "-"}
+                </Text>
               </View>
               <View style={styles.dividerVertical} />
               <View style={styles.resultItem}>
                 <Text style={styles.resultLabel}>Total UPDRS</Text>
-                <Text style={styles.resultValue}>{predictions.total_UPDRS.toFixed(3)}</Text>
+                <Text style={styles.resultValue}>
+                  {predictions.total_UPDRS !== undefined ? predictions.total_UPDRS.toFixed(3) : "-"}
+                </Text>
               </View>
             </View>
-          )}
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
+// --- Styles (unchanged) ---
 const styles = StyleSheet.create({
-  scrollContainer: {
-    flexGrow: 1,
-  },
-  container: {
-    flex: 1,
-    padding: 20,
-    paddingTop: 40,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  description: {
-    fontSize: 15,
-    color: "#6b7280",
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  infoButton: {
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 20,
-    elevation: 4,
-    shadowColor: '#1c33d8',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-  },
-  inputGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-  },
-  inputGroup: {
-    width: "47%",
-    marginBottom: 18,
-  },
-  inputLabel: {
-    fontSize: 11,
-    color: "#4b5563",
-    marginBottom: 6,
-    fontWeight: "700",
-    textTransform: 'uppercase',
-  },
-  input: {
-    height: 48,
-    borderColor: "#e5e7eb",
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    backgroundColor: "#f9fafb",
-    fontSize: 15,
-    color: "#111827",
-    fontWeight: '500',
-  },
-  inputErrorBorder: {
-    borderColor: "#ef4444",
-  },
-  errorText: {
-    color: "#ef4444",
-    fontSize: 10,
-    marginTop: 4,
-  },
-  mainButton: {
-    backgroundColor: '#1c33d8',
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  loadingContainer: {
-    alignItems: "center",
-    marginVertical: 10,
-  },
-  loadingText: {
-    marginTop: 8,
-    color: "#1c33d8",
-    fontWeight: '600',
-  },
-  resultBox: {
-    marginTop: 24,
-    padding: 24,
-    borderRadius: 24,
-    backgroundColor: '#1c33d8',
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-  },
-  resultItem: {
-    alignItems: 'center',
-  },
-  resultLabel: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.7)",
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  resultValue: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#fff",
-  },
-  dividerVertical: {
-    width: 1,
-    height: '60%',
-    backgroundColor: "rgba(255,255,255,0.2)",
-  },
+  scrollContainer: { flexGrow: 1 },
+  container: { flex: 1, padding: 20, paddingTop: 40 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  title: { fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
+  description: { fontSize: 15, color: "#6b7280", marginBottom: 24, lineHeight: 20 },
+  infoButton: { padding: 8, borderRadius: 20, backgroundColor: "#fff", elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2 },
+  card: { backgroundColor: "#fff", borderRadius: 24, padding: 20, elevation: 4, shadowColor: "#1c33d8", shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.08, shadowRadius: 20 },
+  inputGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  inputGroup: { width: "47%", marginBottom: 18 },
+  inputLabel: { fontSize: 11, color: "#4b5563", marginBottom: 6, fontWeight: "700", textTransform: "uppercase" },
+  input: { height: 48, borderColor: "#e5e7eb", borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 12, backgroundColor: "#f9fafb", fontSize: 15, color: "#111827", fontWeight: "500" },
+  inputErrorBorder: { borderColor: "#ef4444" },
+  errorText: { color: "#ef4444", fontSize: 10, marginTop: 4 },
+  mainButton: { backgroundColor: "#1c33d8", height: 56, borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 10 },
+  buttonText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  loadingContainer: { alignItems: "center", marginVertical: 10 },
+  loadingText: { marginTop: 8, color: "#1c33d8", fontWeight: "600" },
+  resultBox: { marginTop: 24, padding: 24, borderRadius: 24, backgroundColor: "#1c33d8", flexDirection: "row", justifyContent: "space-around", alignItems: "center" },
+  resultItem: { alignItems: "center" },
+  resultLabel: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontWeight: "600", marginBottom: 4 },
+  resultValue: { fontSize: 24, fontWeight: "800", color: "#fff" },
+  dividerVertical: { width: 1, height: "60%", backgroundColor: "rgba(255,255,255,0.2)" },
 });

@@ -16,7 +16,14 @@ import { useRouter } from "expo-router";
 import { FontAwesome } from "@expo/vector-icons";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
-import { collection, query, where, getDocs, orderBy, doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  doc,
+  onSnapshot,
+} from "firebase/firestore";
 
 interface PredictionRecord {
   id: string;
@@ -25,72 +32,132 @@ interface PredictionRecord {
   [key: string]: any;
 }
 
+const FIELD_ORDER = [
+  "age",
+  "sex",
+  "test_time",
+  "Jitter(%)",
+  "Jitter:PPQ5",
+  "Shimmer(dB)",
+  "Shimmer:APQ5",
+  "Shimmer:DDA",
+  "NHR",
+  "HNR",
+  "RPDE",
+  "DFA",
+  "PPE",
+];
+
+const FEATURE_MAPPING: { [key: string]: string } = {
+  age: "Age",
+  sex: "Sex (0 = Female, 1 = Male)",
+  test_time: "Test Time (Sec)",
+  "Jitter(%)": "Pitch Wobbliness (Jitter)",
+  "Jitter:PPQ5": "Refined Pitch Wobbliness (Jitter:PPQ5)",
+  "Shimmer(dB)": "Loudness Unsteadiness (Shimmer)",
+  "Shimmer:APQ5": "Refined Loudness Unsteadiness (Shimmer:APQ5)",
+  "Shimmer:DDA": "Loudness Instability (Shimmer:DDA)",
+  NHR: "Noisiness Score (NHR)",
+  HNR: "Clarity Score (HNR)",
+  RPDE: "Signal Randomness (RPDE)",
+  DFA: "Pitch Pattern Consistency (DFA)",
+  PPE: "Pitch Period Disorder (PPE)",
+};
+
 export default function Profile() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? "light"];
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userFirstName, setUserFirstName] = useState<string | null>(null);
+  const [userLastName, setUserLastName] = useState<string | null>(null);
+
   const [records, setRecords] = useState<PredictionRecord[]>([]);
   const [patientIds, setPatientIds] = useState<string[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<string | null>(null);
-  const [loadingRecords, setLoadingRecords] = useState<boolean>(false);
   const [dropdownVisible, setDropdownVisible] = useState(false);
+  const [loadingRecords, setLoadingRecords] = useState<boolean>(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubscribeUser: (() => void) | null = null;
+    let unsubscribeRecords: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         router.replace("/screens/LoginScreen");
       } else {
+        // Listen to user doc in real-time
         const userDocRef = doc(db, "Users", user.uid);
-        const userSnap = await getDoc(userDocRef);
+        unsubscribeUser = onSnapshot(userDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setUserEmail(data.email || user.email);
+            setUserFirstName(data.firstName || "");
+            setUserLastName(data.lastName || "");
+          } else {
+            setUserEmail(user.email);
+            setUserFirstName("");
+            setUserLastName("");
+          }
+        });
 
-        if (userSnap.exists()) {
-          setUserEmail(userSnap.data().email);
-        } else {
-          setUserEmail(user.email);
-        }
-
-        fetchAllPatients(user.uid);
+        // Listen to patient records in real-time
+        unsubscribeRecords = subscribePatientRecords(user.uid);
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeAuth();
+      unsubscribeUser?.();
+      unsubscribeRecords?.();
+    };
   }, []);
 
-  const fetchAllPatients = async (uid: string) => {
+  const subscribePatientRecords = (uid: string) => {
     setLoadingRecords(true);
-    try {
-      const q = query(
-        collection(db, "predictions"),
-        where("userId", "==", uid),
-        orderBy("createdAt", "desc")
-      );
+    const q = query(
+      collection(db, "predictions"),
+      where("userId", "==", uid),
+      orderBy("createdAt", "desc")
+    );
 
-      const snapshot = await getDocs(q);
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const allRecords: PredictionRecord[] = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          createdAt: doc.data().createdAt || null,
+          ...doc.data(),
+        }));
 
-      const allRecords: PredictionRecord[] = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        createdAt: doc.data().createdAt || null,
-        ...doc.data(),
-      }));
+        allRecords.sort((a, b) => {
+          const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+          const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+          return tB - tA;
+        });
 
-      setRecords(allRecords);
+        setRecords(allRecords);
 
-      // Get unique patient IDs
-      const uniqueIds = Array.from(new Set(allRecords.map((r) => r.patientId)));
-      setPatientIds(uniqueIds);
+        const uniqueIds = Array.from(new Set(allRecords.map((r) => r.patientId)));
+        setPatientIds(uniqueIds);
 
-      if (uniqueIds.length > 0) setSelectedPatient(uniqueIds[0]);
-    } catch (error) {
-      console.error("Error fetching records:", error);
-      Alert.alert(
-        "Error",
-        "Could not load your prediction records. Check Firestore indexes."
-      );
-    } finally {
-      setLoadingRecords(false);
-    }
+        // Always select the newest patient
+        if (uniqueIds.length > 0) setSelectedPatient(uniqueIds[0]);
+        else setSelectedPatient(null);
+
+        setLoadingRecords(false);
+      },
+      (error) => {
+        Alert.alert(
+          "Error",
+          "Could not load prediction records. Check Firestore indexes."
+        );
+        setLoadingRecords(false);
+      }
+    );
+
+    return unsubscribe;
   };
 
   const logout = async () => {
@@ -115,12 +182,12 @@ export default function Profile() {
           <FontAwesome name="user-md" size={42} color={theme.primary} />
         </View>
         <Text style={[styles.doctorName, { color: theme.text }]}>
-          Dr. {userEmail?.split("@")[0] || "Doctor"}
+          Dr. {userFirstName} {userLastName}
         </Text>
         <Text style={styles.subtitle}>Medical Analysis Dashboard</Text>
       </View>
 
-      {/* Email Card */}
+      {/* Email */}
       <View style={styles.card}>
         <Text style={styles.label}>CONNECTED EMAIL</Text>
         <View style={styles.emailRow}>
@@ -134,7 +201,7 @@ export default function Profile() {
         </View>
       </View>
 
-      {/* Info Box */}
+      {/* Info */}
       <View style={styles.infoBox}>
         <FontAwesome name="shield" size={16} color="#4b5563" />
         <Text style={styles.infoText}>
@@ -142,7 +209,7 @@ export default function Profile() {
         </Text>
       </View>
 
-      {/* Dropdown */}
+      {/* Patient Selector */}
       <Text style={[styles.recordsTitle, { color: theme.text }]}>
         Select Patient
       </Text>
@@ -207,13 +274,15 @@ export default function Profile() {
                   ? item.createdAt.toDate().toLocaleString()
                   : "N/A"}
               </Text>
-              {Object.entries(item).map(([key, value]) => {
-                if (["userId", "createdAt", "id", "patientId"].includes(key))
-                  return null;
+
+              {FIELD_ORDER.map((key) => {
+                if (!(key in item)) return null;
                 return (
                   <View key={key} style={styles.recordRow}>
-                    <Text style={styles.recordKey}>{key}</Text>
-                    <Text style={styles.recordValue}>{value}</Text>
+                    <Text style={styles.recordKey}>
+                      {FEATURE_MAPPING[key] || key}
+                    </Text>
+                    <Text style={styles.recordValue}>{item[key]}</Text>
                   </View>
                 );
               })}
@@ -222,8 +291,12 @@ export default function Profile() {
         />
       )}
 
+      {/* Logout */}
       <Pressable
-        style={({ pressed }) => [styles.logoutButton, pressed && { opacity: 0.8 }]}
+        style={({ pressed }) => [
+          styles.logoutButton,
+          pressed && { opacity: 0.8 },
+        ]}
         onPress={logout}
       >
         <FontAwesome
@@ -250,9 +323,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
     elevation: 5,
-    shadowColor: "#1c33d8",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
   },
   doctorName: { fontSize: 24, fontWeight: "800", marginTop: 6 },
   subtitle: { fontSize: 13, color: "#6b7280", marginTop: 4 },
@@ -262,12 +332,14 @@ const styles = StyleSheet.create({
     padding: 24,
     marginBottom: 20,
     elevation: 4,
-    shadowColor: "#1c33d8",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
   },
-  label: { fontSize: 11, fontWeight: "800", color: "#9ca3af", letterSpacing: 1, marginBottom: 8 },
+  label: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#1c33d8",
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
   emailRow: { flexDirection: "row", alignItems: "center" },
   value: { fontSize: 17, fontWeight: "600", color: "#111827" },
   infoBox: {
@@ -280,8 +352,6 @@ const styles = StyleSheet.create({
   },
   infoText: { fontSize: 13, color: "#4b5563", marginLeft: 10, flex: 1 },
   recordsTitle: { fontSize: 18, fontWeight: "700", marginBottom: 10 },
-
-  // Dropdown styles
   dropdownButton: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -290,20 +360,39 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 12,
     marginBottom: 20,
-    elevation: 2,
   },
   dropdownButtonText: { fontSize: 16, color: "#111827" },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", padding: 24 },
-  modalContent: { backgroundColor: "#fff", borderRadius: 12, maxHeight: "50%" },
-  modalItem: { padding: 16, borderBottomColor: "#e5e7eb", borderBottomWidth: 1 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    maxHeight: "50%",
+  },
+  modalItem: {
+    padding: 16,
+    borderBottomColor: "#e5e7eb",
+    borderBottomWidth: 1,
+  },
   modalItemText: { fontSize: 16, color: "#111827" },
-
-  recordCard: { backgroundColor: "#f3f4f6", padding: 12, borderRadius: 12, marginBottom: 10 },
+  recordCard: {
+    backgroundColor: "rgba(28, 51, 216, 0.05)",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
   recordDate: { fontSize: 12, color: "#6b7280", marginBottom: 6 },
-  recordRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
+  recordRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
   recordKey: { fontSize: 13, fontWeight: "600", color: "#374151" },
   recordValue: { fontSize: 13, color: "#111827" },
-
   logoutButton: {
     backgroundColor: "#1c33d8",
     height: 56,

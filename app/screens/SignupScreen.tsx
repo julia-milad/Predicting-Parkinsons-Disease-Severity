@@ -20,12 +20,16 @@ const { width } = Dimensions.get("window");
 export default function SignupScreen() {
   const router = useRouter();
 
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const [errors, setErrors] = useState<{
+    firstName?: string;
+    lastName?: string;
     email?: string;
     password?: string;
     confirmPassword?: string;
@@ -35,6 +39,16 @@ export default function SignupScreen() {
   const validateFields = (): boolean => {
     const newErrors: typeof errors = {};
     let valid = true;
+
+    if (!firstName.trim()) {
+      newErrors.firstName = "First name is required";
+      valid = false;
+    }
+
+    if (!lastName.trim()) {
+      newErrors.lastName = "Last name is required";
+      valid = false;
+    }
 
     if (!email.trim()) {
       newErrors.email = "Email is required";
@@ -78,6 +92,8 @@ export default function SignupScreen() {
       // Create Firestore document in "Users" collection
       await setDoc(doc(db, "Users", user.uid), {
         uid: user.uid,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
         email: user.email,
         createdAt: new Date(),
       });
@@ -99,6 +115,25 @@ export default function SignupScreen() {
         <View style={styles.box}>
           <Text style={styles.title}>Create Your Account</Text>
 
+          {/* First Name */}
+          <TextInput
+            placeholder="First Name"
+            style={[styles.input, errors.firstName ? styles.inputError : null]}
+            value={firstName}
+            onChangeText={setFirstName}
+          />
+          {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
+
+          {/* Last Name */}
+          <TextInput
+            placeholder="Last Name"
+            style={[styles.input, errors.lastName ? styles.inputError : null]}
+            value={lastName}
+            onChangeText={setLastName}
+          />
+          {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
+
+          {/* Email */}
           <TextInput
             placeholder="Email"
             style={[styles.input, errors.email ? styles.inputError : null]}
@@ -109,6 +144,7 @@ export default function SignupScreen() {
           />
           {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
 
+          {/* Password */}
           <TextInput
             placeholder="Password"
             style={[styles.input, errors.password ? styles.inputError : null]}
@@ -118,6 +154,7 @@ export default function SignupScreen() {
           />
           {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
 
+          {/* Confirm Password */}
           <TextInput
             placeholder="Confirm Password"
             style={[styles.input, errors.confirmPassword ? styles.inputError : null]}
@@ -129,6 +166,7 @@ export default function SignupScreen() {
             <Text style={styles.errorText}>{errors.confirmPassword}</Text>
           )}
 
+          {/* General error */}
           {errors.general && (
             <Text style={[styles.errorText, { textAlign: "center" }]}>{errors.general}</Text>
           )}
